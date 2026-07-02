@@ -1,0 +1,126 @@
+library(tidyverse)
+library(cowplot)
+library(dplyr)
+library(scales)
+library(readxl)
+
+
+#reconfiguration of dataframe 
+df <- read_xlsx("260609all_fluo.xlsx") |>
+  pivot_longer(
+    cols      = -time,                        
+    names_to  = c("position", "channel"),
+    names_pattern = "pos(\\d+)_(.*)",           
+    values_to = "fluorescence"
+  ) |>
+  mutate(position = as.integer(position))
+
+#summarising data by flourescence colour
+df <- df |>
+  group_by(channel) |>
+  mutate(fluor_norm = rescale(fluorescence, to = c(0, 1))) |>
+  ungroup()
+
+#creating function to assign values to colour ranges
+map_to_colour <- function(values, low, high) {
+  ramp <- colorRamp(c(low, high))
+  m    <- ramp(pmax(0, pmin(1, values)))   # clamp to [0,1] first
+  rgb(m[, 1], m[, 2], m[, 3], maxColorValue = 255)
+}
+
+#number to colour range
+df_plot <- df |>
+  mutate(
+    fill_col = case_when(
+      channel == "GFP"     ~ map_to_colour(fluor_norm, "#ddeedd", "#1a7a1a"),
+      channel == "mCherry" ~ map_to_colour(fluor_norm, "#eedde6", "#9b1a5a")
+    ),
+  
+    y_row = (position - 1) * 2.4 + if_else(channel == "GFP", 1, 2)
+  )
+
+
+#y-axis labels
+y_label_pos <- (0:8) * 2.4 + 1.5   
+
+y_labels <- tibble(
+  y_pos = y_label_pos,
+  label = paste(1:9)
+)
+
+
+#heatmap plot
+p_main <- ggplot(df_plot, aes(x = time, y = y_row, fill = fill_col)) +
+  geom_tile(height = 0.95, width = (diff(range(df_plot$time)) / length(unique(df_plot$time))) * 1.02)+ #removes random gaps between tiles
+  scale_fill_identity() +
+  scale_x_continuous(
+    expand = c(0, 0),
+    name   = "Time (hours)"
+  ) +
+  scale_y_continuous(
+    breaks = y_labels$y_pos,
+    labels = y_labels$label,
+    expand = c(0.02, 0)
+  ) +
+  theme_minimal_hgrid(12) +
+  theme(
+    axis.title.y  = element_blank(),
+    panel.grid    = element_blank(),
+    axis.ticks.x  = element_line(linewidth = 0.3),
+    plot.margin   = margin(5, 15, 5, 5)
+  )
+
+
+#colour bar legend function
+make_legend_bar <- function(low, high, title) {
+  colour_bar_df <- tibble(
+    x    = seq(1, 0, length.out = 200),
+    y    = 1,
+    fill = map_to_colour(x, low, high)
+  )
+  ggplot(colour_bar_df, aes(x = x, y = y, fill = fill)) +
+    geom_tile(height = 1) +
+    scale_fill_identity() +
+    scale_x_continuous(
+      breaks = c(0, 0.5, 1),
+      labels = c("Max", "", "Min"),
+      expand = c(0, 0)
+    ) +
+    labs(title = title) +
+    theme_nothing() +
+    theme(
+      plot.title   = element_text(size = 9, hjust = 0.5, face = "bold",
+                                  margin = margin(b = 2)),
+      axis.text.x  = element_text(size = 7),
+      axis.ticks.x = element_line(linewidth = 0.3),
+      plot.margin  = margin(2, 20, 2, 20)
+    )
+}
+
+#creating legends
+leg_gfp     <- make_legend_bar("#1a7a1a", "#ddeedd", "GFP")
+leg_mcherry <- make_legend_bar("#9b1a5a", "#eedde6", "mCherry")
+
+legend_row <- plot_grid(
+  leg_gfp, leg_mcherry,
+  ncol       = 2,
+  rel_widths = c(1, 1)
+)
+
+
+#final plot parameters
+final_plot <- plot_grid(
+  p_main,
+  legend_row,
+  ncol        = 1,
+  rel_heights = c(12, 1)
+)
+
+print(final_plot)
+
+ggsave("fluorescence_heatmap.pdf", final_plot,
+       width = 12, height = 7, units = "in")
+ggsave("fluorescence_heatmap.png", final_plot,
+       width = 12, height = 7, units = "in", dpi = 600)
+
+
