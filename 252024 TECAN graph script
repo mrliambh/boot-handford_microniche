@@ -1,0 +1,156 @@
+#load your libraries
+library(tidyverse)
+library(cowplot)
+library(dplyr) 
+library(readxl)
+
+
+#setting your dataframes and dictionary in the format of 2 columns
+df <- read.csv("251024 MOI0.1-100 plate.csv", check.names = FALSE)
+dictionary <- read.csv("251024 Dictionary.csv")
+
+
+#join the dataframe and dictionary
+df <- df %>% left_join(dictionary)
+
+#cleaning dataframe
+df$Well= factor(df$Well, levels=paste(rep(LETTERS[1:8], each = length(seq(1, 12))), seq(1, 12), sep = ""))
+df <- df %>% mutate(row=gsub('^([A-H])(.*)', '\\1', Well), column=factor(gsub('^([A-H])(.*)', '\\2', Well), levels=1:12))
+
+#creating a blanks dataframe to normalise  data to the blank 
+blks_df <- df %>% filter(Treatment == "Blank") %>% group_by(time_hours) %>% summarise(mean_blk_od = mean(mean_od))
+
+#normalising data to the blanks
+df_norm <- df %>% left_join(blks_df) %>% mutate(norm_od = mean_od - mean_blk_od)
+
+#remove MOIs 100 and 10
+df_mean_growth_curve_bottom_half <- df_norm %>% 
+  filter(Treatment %in% c("MOI 1 T7?capsid", "MOI 1 T7?capsid + pCapsid", "MOI 0.1 T7?capsid", "MOI 0.1 T7?capsid + pCapsid"))
+
+#Creating a growth curve per Well
+overall_growth_curves <- ggplot(df_norm, aes(x = time_hours, y = norm_od)) +
+  geom_line(color='#0072B2') +
+  scale_x_continuous('Time (Hours)') +
+  scale_y_continuous('OD600') +
+  ylab("Mean OD600") +
+  facet_wrap(~Well, ncol = 12)
+overall_growth_curves
+
+
+#Mean Growth Curve with StDev
+#creating a mean dataframe
+df_mean <- df_norm %>% group_by(Treatment, time_hours) %>% summarise(time_hours = time_hours, Treatment = Treatment, OD600 = mean(norm_od), STDEV = sd(norm_od))
+#removing the blk Wells
+df_mean <- df_mean %>% filter(!Treatment == "Blank")
+
+#creating the plot
+mean_growth_curve <- ggplot(data = df_mean, aes(x = time_hours, y = OD600, colour = Treatment)) +
+  geom_line() +
+  geom_errorbar(aes(ymin = OD600 - STDEV, ymax = OD600 + STDEV), width = 0.2) +
+  scale_y_continuous('Mean OD600 (n=10)') +
+  scale_x_continuous('Time (Hours)') +
+  ggtitle("XX") +
+  theme_bw() +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=2))
+mean_growth_curve
+
+
+
+
+##This part is for facetted plots - separate graphs for each Treatment
+
+
+## calculating the standard error and CI95
+df_SE <- df_mean %>% mutate(SE = STDEV/sqrt(6))
+df_CI <- df_SE %>% mutate(CI95 = 1.96*SE)
+df_CI <- df_CI %>% mutate(CI95_min = OD600 - CI95) %>% mutate(CI95_max = OD600 + CI95)
+
+#separated  data into different Treatments
+df_wildtype_curve<- df_CI %>% 
+  filter(!(Treatment %in% c("MOI 100 T7?capsid","MOI 10 T7?capsid","MOI 1  T7?capsid","MOI 0.1  T7?capsid","Blank","WT","pCapsid"))) %>% 
+  mutate(Treatment = factor(Treatment, 
+                            levels = c("MOI 100 T7?capsid + pCapsid","MOI 10 T7?capsid + pCapsid","MOI 1  T7?capsid + pCapsid","MOI 0.1  T7?capsid + pCapsid")))
+
+df_biocont_curve<- df_CI %>%
+  filter(!(Treatment %in% c("MOI 100 T7?capsid + pCapsid","MOI 10 T7?capsid + pCapsid","MOI 1  T7?capsid + pCapsid","MOI 0.1  T7?capsid + pCapsid","Blank","WT","pCapsid"))) %>% 
+  mutate(Treatment = factor(Treatment, 
+                            levels = c("MOI 100 T7?capsid","MOI 10 T7?capsid","MOI 1  T7?capsid","MOI 0.1  T7?capsid")))
+
+df_both_curve<- df_CI %>%
+  filter(!(Treatment %in% c("Blank","WT","pCapsid"))) %>% 
+  mutate(Treatment = factor(Treatment, 
+                            levels = c("MOI 100 T7?capsid + pCapsid","MOI 100 T7?capsid","MOI 10 T7?capsid + pCapsid","MOI 10 T7?capsid","MOI 1 T7?capsid + pCapsid","MOI 1 T7?capsid","MOI 0.1 T7?capsid + pCapsid","MOI 0.1 T7?capsid")))
+
+
+df_both_curve$Treatment <- factor(df_both_curve$Treatment,
+  levels = c(
+              "MOI 100 T7?capsid", "MOI 100 T7?capsid + pCapsid",
+              "MOI 10 T7?capsid",  "MOI 10 T7?capsid + pCapsid",
+              "MOI 1 T7?capsid",   "MOI 1 T7?capsid + pCapsid",
+              "MOI 0.1 T7?capsid", "MOI 0.1 T7?capsid + pCapsid"))
+
+
+
+#custom labels
+custom_labels <- as_labeller(c(
+  "MOI 100 T7?capsid" = "MOI 100",
+  "MOI 100 T7?capsid + pCapsid" = "MOI 100",
+  "MOI 10 T7?capsid" = "MOI 10",
+  "MOI 10 T7?capsid + pCapsid" = "MOI 10",
+  "MOI 1 T7?capsid" = "MOI 1",
+  "MOI 1 T7?capsid + pCapsid" = "MOI 1",
+  "MOI 0.1 T7?capsid" = "MOI 0.1",
+  "MOI 0.1 T7?capsid + pCapsid" = "MOI 0.1"
+), label_value)
+
+
+
+all_faceted_growth_curves_red <- ggplot(data = df_both_curve, 
+                                        aes(x = time_hours, y = OD600, colour = Treatment, fill = Treatment)) +
+  geom_line(size=1.5) +
+  geom_ribbon(aes(ymin=CI95_min, ymax=CI95_max), alpha=0.2, show.legend= FALSE) +
+  scale_colour_manual(values = c(
+    "MOI 100 T7?capsid" = "#9b1b5b",
+    "MOI 100 T7?capsid + pCapsid" = "#1b7b1b",
+    "MOI 10 T7?capsid" = "#9b1b5b",
+    "MOI 10 T7?capsid + pCapsid" = "#1b7b1b",
+    "MOI 1 T7?capsid" = "#9b1b5b",
+    "MOI 1 T7?capsid + pCapsid" = "#1b7b1b",
+    "MOI 0.1 T7?capsid" = "#9b1b5b",
+    "MOI 0.1 T7?capsid + pCapsid" = "#1b7b1b"
+  )) +
+  scale_fill_manual(values = c(
+    "MOI 100 T7?capsid" = "#9b1b5b",
+    "MOI 100 T7?capsid + pCapsid" = "#1b7b1b",
+    "MOI 10 T7?capsid" = "#9b1b5b",
+    "MOI 10 T7?capsid + pCapsid" = "#1b7b1b",
+    "MOI 1 T7?capsid" = "#9b1b5b",
+    "MOI 1 T7?capsid + pCapsid" = "#1b7b1b",
+    "MOI 0.1 T7?capsid" = "#9b1b5b",
+    "MOI 0.1 T7?capsid + pCapsid" = "#1b7b1b"
+  )) +
+  scale_y_continuous('Mean OD600 (n=6)', breaks = c(-0.2, 0, 0.2, 0.4, 0.6, 0.8), limits = c(-0.1, 0.8)) +
+  scale_x_continuous('Time (Hours)', breaks = seq(0,24, by=4), limits = c(0, 24), expand = c(0, 0)) +
+  facet_wrap(~Treatment, ncol = 2, labeller = custom_labels) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.title.x = element_text(size=16),
+        axis.title.y = element_text(size=16),
+        axis.text.y = element_text(size=16),
+        axis.text.x = element_text(size=16),
+        strip.text = element_text(size=14),
+        legend.text = element_text(size=14),
+        legend.title = element_text(size=14),
+        plot.margin = margin(t = 10, r = 10, b = 10, l = 10),   
+        panel.spacing.x = unit(1.5, "lines")                    
+  )
+
+
+all_faceted_growth_curves_red
+
+
+
+
